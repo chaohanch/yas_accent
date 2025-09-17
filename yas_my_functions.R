@@ -1,28 +1,3 @@
-my_func_get_single_ppt_data <- function(file) {
-  
-  # get data
-  raw <- read_csv(paste0("~/OneDrive - University of Toronto/Projects/Yas accent/data_analysis/gam/", file))
-  # select channel
-  df <- raw %>%
-    # select channel
-    select(c(time, all_of(chan), participant, item)) %>%
-    rowwise() %>%
-    mutate(uV = mean(c_across(all_of(chan)), na.rm = TRUE)) %>%
-    ungroup() %>%
-    select(c(time, participant, item, uV)) %>%
-    # split into conditions
-    separate(col = item, into = c("condition", "item"), sep="/") %>%
-    mutate(participant = as.factor(participant),
-           item = as.factor(item),
-           condition = as.factor(condition),
-           time = as.numeric(time)) %>%
-    mutate(condition = as.factor(condition)) %>%
-    droplevels()
-  
-  return(df)
-  
-}
-
 my_func_extract_gam_measures <- function(dat, search_min, search_max) {
   
   # subset search data
@@ -81,7 +56,7 @@ my_func_extract_gam_measures <- function(dat, search_min, search_max) {
     peak_time <- NA
     peak_se <- NA
     NMP <- NA
-  } else if ((peak_time == min(sdat$time))) { # if peak time is the first point, there is so no real minimum
+  } else if ( (peak_time == min(sdat$time)) | (peak_time == max(sdat$time)) ) { # the peak time shouldn't be the first or the last time pont
     hasPeak <- FALSE
     peak_height <- NA
     peak_time <- NA

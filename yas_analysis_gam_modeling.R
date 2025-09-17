@@ -8,8 +8,9 @@
 
 library(tidyverse)
 library(mgcv)
-library(itsadug)
-source("~/Documents/GitHub/yas_accent/my_functions.R")
+# library(itsadug)
+library(gratia)
+source("~/Documents/GitHub/yas_accent/yas_my_functions.R")
 
 # Load data and cleaning
 # 
@@ -49,23 +50,16 @@ source("~/Documents/GitHub/yas_accent/my_functions.R")
 
 
 # define search window
-search_min = 150; search_max = 800;
+search_min = 0; search_max = 900;
 # define classic erp window (this can be from permutation test)
-trad_min1 <- 200; trad_max1 <- 350
-trad_min2 <- 450; trad_max2 <- 600
+trad_min <- 332; trad_max <- 632
 
 
 # collect files
-all_files <- list.files("~/OneDrive - University of Toronto/Projects/Yas accent/data_analysis/gam/", pattern = "\\.csv$")
+all_files <- list.files("~/OneDrive - University of Toronto/Projects/Yas accent/data_analysis/gam/item_level/", pattern = "\\.csv$")
 
 # trim and combine files and code participant
 chan = c('Cz', 'Fz', 'FC1', 'FC2', 'CP1', 'CP2', 'C3', 'C4', 'Pz')
-
-# list for indexing condition
-`ChEn-devi` <- 1; `EnCh-stan` <- 4
-`EnCh-devi` <- 3; `ChEn-stan` <- 2
-`InEn-devi` <- 7; `EnIn-stan` <- 6
-`EnIn-devi` <- 5; `InEn-stan` <- 8
 
 # initialize the full dataframe
 df_gam <- data.frame()
@@ -74,12 +68,31 @@ for (file in all_files) {
   # get participant
   ppt <- strsplit(file, split = "_")[[1]][1]
   
-  df <- my_func_get_single_ppt_data(file)
+  # get data
+  raw <- read_csv(paste0("~/OneDrive - University of Toronto/Projects/Yas accent/data_analysis/gam/item_level/", file))
+  # organize data
+  df <- raw %>%
+    # rename(item = condition) %>%
+    # select channel
+    # select(c(time, all_of(chan), participant, item, epoch)) %>%
+    select(c(time, all_of(chan), participant, item)) %>%
+    rowwise() %>%
+    mutate(uV = mean(c_across(all_of(chan)), na.rm = TRUE)) %>%
+    ungroup() %>%
+    # select(c(time, participant, item, epoch, uV)) %>%
+    select(c(time, participant, item, uV)) %>%
+    # split into conditions
+    separate(col = item, into = c("condition", "item"), sep="/") %>%
+    mutate(participant = as.factor(participant),
+           item = as.factor(item),
+           condition = as.factor(condition),
+           time = as.numeric(time)) %>%
+    mutate(condition = as.factor(condition)) %>%
+    droplevels()
   
   # modeling
   model <- bam(uV ~ 
-                 # poa * stim_role +        # fixed effects
-                 s(time, by = condition) +  # smooth for each poa x direction x stim_role
+                 s(time, by = condition) +
                  s(time, item, bs = "fs", m = 1), # random smooth by item
                data = df, 
                discrete = TRUE)  # for large data for speed
@@ -87,9 +100,18 @@ for (file in all_files) {
   # get values and SE for every individual time point
   min_time <- min(model$model[, "time"])
   max_time <- max(model$model[, "time"])
-  nval = length(seq(min_time, max_time))
-  
+  # grid_time <- seq(min_time, max_time, by = 4) # 250Hz sampling rate
+  grid_time <- seq(min_time, max_time)
+
   # summary(model)
+  
+  # get difference for MMN
+  diff_all <- difference_smooths(
+    model,
+    select = "s(time)",
+    n = length(grid_time),
+    unconditional = TRUE
+  )
   
   # %%%%% extract peak height, peak time, and NMP %%%%%%
   
@@ -102,24 +124,24 @@ for (file in all_files) {
       dplyr::summarize(mean_uV = mean(uV)) %>%
       ungroup() %>%
       pivot_wider(names_from = condition, values_from = mean_uV) %>%
-      mutate(diff = get(cond[1]) - get(cond[2]))
+      mutate(diff = .[[cond[1]]] - .[[cond[2]]])
+    
     # get traditional erp measures
-    trad_erp1 = mean(tmp_df[tmp_df$time>=trad_min1 & tmp_df$time<=trad_max1, ]$diff)
-    trad_erp2 = mean(tmp_df[tmp_df$time>=trad_min2 & tmp_df$time<=trad_max2, ]$diff)
+    trad_erp = mean(tmp_df[tmp_df$time>=trad_min & tmp_df$time<=trad_max, ]$diff)
+
+    # # extract modeled standard and deviant data
+    # devi <- itsadug::get_modelterm(model, select=get(cond[1]), n.grid = nval, as.data.frame = TRUE)
+    # stan <- itsadug::get_modelterm(model, select=get(cond[2]), n.grid = nval, as.data.frame = TRUE)
     
-    # extract modeled standard and deviant data
-    devi <- itsadug::get_modelterm(model, select=get(cond[1]), n.grid = nval, as.data.frame = TRUE)
-    stan <- itsadug::get_modelterm(model, select=get(cond[2]), n.grid = nval, as.data.frame = TRUE)
-    # get difference for MMN
-    dat <- devi %>%
-      mutate(condition = "mmn",
-             fit = devi$fit - stan$fit,
-             se.fit = sqrt(devi$se.fit^2 + stan$se.fit^2))
+    dat <- diff_all %>%
+      filter( (.level_1 %in% cond) & (.level_2 %in% cond)) %>%
+      mutate(fit = ifelse(endsWith(.level_1, "-devi"), .diff, -.diff),
+             se.fit = .se) %>%
+      select(time, fit, se.fit) %>%
+      droplevels()
     
-    gam_erp1 = mean(dat[dat$time>=trad_min1 & dat$time<=trad_max1, ]$fit)
-    gam_erp2 = mean(dat[dat$time>=trad_min2 & dat$time<=trad_max2, ]$fit)
-    
-    
+    gam_erp = mean(dat[dat$time>=trad_min & dat$time<=trad_max, ]$fit)
+
     # get gam measures
     results <- my_func_extract_gam_measures(dat, search_min, search_max)
     
@@ -139,7 +161,7 @@ for (file in all_files) {
     
     # get measures for the current condition
     condition <- cond[1]
-    tmp_row <- data.frame(ppt, condition, hasPeak, area, peak_height, peak_se, NMP, peak_time, half_area_latency, trad_erp1, trad_erp2, gam_erp1, gam_erp2)
+    tmp_row <- data.frame(ppt, condition, hasPeak, area, peak_height, peak_se, NMP, peak_time, half_area_latency, trad_erp, gam_erp)
     # add to the extracted data
     df_gam <- rbind(df_gam, tmp_row)
     
@@ -200,4 +222,5 @@ for (file in all_files) {
   }
 }
 
-write.table(df_gam, file = "~/OneDrive - University of Toronto/Projects/Yas accent/data_analysis/gam/df_gam.txt", sep = "\t")
+write.table(df_gam, file = "~/OneDrive - University of Toronto/Projects/Yas accent/data_analysis/gam/df_gam_itemLevel_dependentSE.txt", sep = "\t")
+

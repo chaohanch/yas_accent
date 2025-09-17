@@ -4,13 +4,19 @@ library(ggpubr)
 library(corrplot)
 library(ez)
 library(Hmisc)
+library(car)
+library(emmeans)
 source("~/Documents/R functions/corstars.R")
 
-df_gam <- read.table(file = "~/OneDrive - University of Toronto/Projects/Yas accent/data_analysis/gam/df_gam.txt")
+# load data ####
+df_gam <- read.table(file = "~/OneDrive - University of Toronto/Projects/Yas accent/data_analysis/gam/df_gam_itemLevel_dependentSE.txt")
 
 df_ppt <- read_delim("~/OneDrive - University of Toronto/Projects/Yas accent/data_analysis/ppt_demos.txt", delim = "\t") %>%
   filter(exclude != 1) %>%
-  select(ppt, grouping1, english_start_age, english_daily_use, english_speaking, english_listening, english_reading, english_writing) %>%
+  select(ppt, CHI, BILINGUAL, ENG, 
+         chinese_start_age, chinese_daily_use, chinese_speaking, chinese_listening, chinese_reading, chinese_writing, chinese_overall, chinese_listeningspeaking,
+         english_start_age, english_daily_use, english_speaking, english_listening, english_reading, english_writing, english_overall, english_listeningspeaking,
+         music_formal, music_informal, music_total) %>%
   droplevels()
 
 
@@ -18,14 +24,13 @@ df_ppt <- read_delim("~/OneDrive - University of Toronto/Projects/Yas accent/dat
 df_gam_complete <- df_gam %>%
   inner_join(df_ppt, by = "ppt") %>%
   mutate(group = case_when(
-    grouping1=="EN" ~ "ENG", # ENG mean English speakers excluding SEA and CBC
-    grouping1=="CH" ~ "CHI",
-    grouping1=="SE" ~ "SEA",
-    grouping1=="CBC" ~ "CBC",
+    ENG==1 ~ "ENG", # ENG mean English speakers excluding SEA and CBC
+    CHI=="1" ~ "CHI",
+    BILINGUAL=="1" ~ "BILINGUAL",
     .default = "ELSE"
   )) %>%
   # select group and conditions
-  filter(group %in% c("ENG", "CHI", "SEA", "CBC")) %>%
+  filter(group %in% c("ENG", "CHI", "BILINGUAL")) %>%
   filter(condition %in% c("ChEn-devi", "EnCh-devi")) %>%
   droplevels() %>%
   # convert hasPeak to 1 and 0
@@ -47,214 +52,215 @@ no_peak_ppts <- df_gam_complete %>%
   droplevels()
 
 df_gam_hasPeak <- df_gam_complete %>%
+  # filter(hasPeak == "TRUE") %>%
   filter(hasPeak == "TRUE" & !(ppt %in% no_peak_ppts$ppt) ) %>%
+  # filter(half_area_latency >= 150 & half_area_latency <= 600) %>%
   droplevels()
 
-df_mod <- df_gam_hasPeak %>%
+# check sample size
+df_gam_hasPeak %>% group_by(group, condition) %>% dplyr::summarize(n = n())
+
+# plotting and stats ####
+
+## plot data ####
+df_plot <- df_gam_hasPeak %>%
+  # filter(condition %in% c("ChEn-devi")) %>%
   filter(condition %in% c("ChEn-devi", "EnCh-devi")) %>%
-  droplevels() %>%
-  mutate(condition = factor(condition, levels = c("EnCh-devi", "ChEn-devi")),
-         group = factor(group, levels = c("CHI", "ENG")))
-ch_en <- c(-1/2, 1/2)
-CHIgroup_ENGgroup<- c(-1/2, 1/2)
-# CHgroup_Natives<- c(-2/3, 1/3, 1/3)
-# ENgroup_CBCgroup <- c(0, -1/2, 1/2)
-contrasts(df_mod$condition) <- cbind(ch_en)
-contrasts(df_mod$group) <- cbind(CHIgroup_ENGgroup)
+  mutate(
+    condition = factor(condition, levels = c("ChEn-devi", "EnCh-devi")),
+    group = factor(group, levels = c("ENG", "BILINGUAL", "CHI"))
+  ) %>%
+  droplevels()
 
-## plot traditional erps and stats ####
+## stats data ####
+df_mod <- df_gam_hasPeak %>%
+  # filter(condition %in% c("ChEn-devi")) %>%
+  filter(condition %in% c("ChEn-devi", "EnCh-devi")) %>%
+  mutate(
+    condition = factor(condition, levels = c("ChEn-devi", "EnCh-devi")),
+    group = factor(group, levels = c("ENG", "BILINGUAL", "CHI"))
+         ) %>%
+  droplevels()
+
+# set contrast
+en_ch <- c(-1/2, 1/2)
+contrasts(df_mod$condition) <- cbind(en_ch)
+
+LANG_AUDI <- c(-1/3, -1/3, 2/3)
+MONO_BILI <- c(-1/2, 1/2, 0)
+contrasts(df_mod$group) <- cbind(LANG_AUDI, MONO_BILI)
+
+## traditional erp ####
 fig <-
-ggplot(data = df_gam_hasPeak) +
-  geom_boxplot(aes(x = group, y = trad_erp1, fill = condition)) +
+  ggplot(data = df_plot) +
+  geom_boxplot(aes(x = group, y = trad_erp, fill = condition)) +
   theme_bw()
 print(fig)
-ggsave(plot = fig, width = 5, height = 5, units = "in", dpi = 300, filename = "~/OneDrive - University of Toronto/Projects/Yas accent/figures/gam/gam_trad_erp1.png")
+# ggsave(plot = fig, width = 5, height = 5, units = "in", dpi = 300, filename = "~/OneDrive - University of Toronto/Projects/Yas accent/figures/gam/gam_trad_erp.png")
 
-# stats
-summary(mod <- lmer(trad_erp1 ~ condition * group + (1|ppt), data = df_mod))
-ezANOVA(data = df_mod,
-        dv = trad_erp1,
-        wid = ppt,
-        within = condition,
-        between = group,
-        type = 3,
-        detailed = TRUE)
+# mod <- lm(trad_erp ~ group, data = df_mod)
+mod <- lmer(trad_erp ~ group*condition + (1|ppt), data = df_mod)
+summary(mod)
+Anova(mod, type="III")
+pair_comp <- emmeans(mod, pairwise ~ group | condition)
+test(pair_comp)
 
+
+
+## gam erp ####
 fig <-
-ggplot(data = df_gam_hasPeak) +
-  geom_boxplot(aes(x = group, y = trad_erp2, fill = condition)) +
+  ggplot(data = df_plot) +
+  geom_boxplot(aes(x = group, y = gam_erp, fill = condition)) +
   theme_bw()
 print(fig)
-ggsave(plot = fig, width = 5, height = 5, units = "in", dpi = 300, filename = "~/OneDrive - University of Toronto/Projects/Yas accent/figures/gam/gam_trad_erp2.png")
+# ggsave(plot = fig, width = 5, height = 5, units = "in", dpi = 300, filename = "~/OneDrive - University of Toronto/Projects/Yas accent/figures/gam/gam_trad_erp.png")
 
-summary(mod <- lmer(trad_erp2 ~ condition * group + (1|ppt), data = df_mod))
-ezANOVA(data = df_mod,
-        dv = trad_erp2,
-        wid = ppt,
-        within = condition,
-        between = group,
-        type = 3,
-        detailed = TRUE)
+# mod <- lm(gam_erp ~ group, data = df_mod)
+mod <- lmer(gam_erp ~ group*condition + (1|ppt), data = df_mod)
+summary(mod)
+Anova(mod, type = "III")
+pair_comp <- emmeans(mod, pairwise ~ group | condition)
+test(pair_comp)
 
-## plot gam erps and stats ####
+
+## modeled area ####
 fig <- 
-ggplot(data = df_gam_hasPeak) +
-  geom_boxplot(aes(x = group, y = gam_erp1, fill = condition)) +
-  theme_bw()
-print(fig)
-ggsave(plot = fig, width = 5, height = 5, units = "in", dpi = 300, filename = "~/OneDrive - University of Toronto/Projects/Yas accent/figures/gam/gam_gam_erp1.png")
-
-summary(mod <- lmer(gam_erp1 ~ condition * group + (1|ppt), data = df_mod))
-ezANOVA(data = df_mod,
-        dv = gam_erp1,
-        wid = ppt,
-        within = condition,
-        between = group,
-        type = 3,
-        detailed = TRUE)
-
-fig <- 
-ggplot(data = df_gam_hasPeak) +
-  geom_boxplot(aes(x = group, y = gam_erp2, fill = condition)) +
-  theme_bw()
-print(fig)
-ggsave(plot = fig, width = 5, height = 5, units = "in", dpi = 300, filename = "~/OneDrive - University of Toronto/Projects/Yas accent/figures/gam/gam_gam_erp2.png")
-
-summary(mod <- lmer(gam_erp2 ~ condition * group + (1|ppt), data = df_mod))
-ezANOVA(data = df_mod,
-        dv = trad_erp2,
-        wid = ppt,
-        within = condition,
-        between = group,
-        type = 3,
-        detailed = TRUE)
-
-
-## plotting modeled area and stats ####
-fig <- 
-ggplot(data = df_gam_hasPeak) +
+  ggplot(data = df_plot) +
   geom_boxplot(aes(x = group, y = area, fill = condition)) +
   theme_bw()
 print(fig)
-ggsave(plot = fig, width = 5, height = 5, units = "in", dpi = 300, filename = "~/OneDrive - University of Toronto/Projects/Yas accent/figures/gam/gam_area.png")
 
-summary(mod <- lmer(area ~ condition * group + (1|ppt), data = df_mod))
-ezANOVA(data = df_mod,
-  dv = area,
-  wid = ppt,
-  within = condition,
-  between = group,
-  type = 3,
-  detailed = TRUE)
+# mod <- lm(area ~ group, data = df_mod)
+mod <- lmer(area ~ group*condition + (1|ppt), data = df_mod)
+summary(mod)
+Anova(mod, type="III")
+# pair_comp <- emmeans(mod, pairwise ~ group)
+pair_comp <- emmeans(mod, pairwise ~ group | condition)
+test(pair_comp)
 
-## plotting modeled peak amplitude and stats ####
+## modeled peak ####
 fig <- 
-ggplot(data = df_gam_hasPeak) +
+  ggplot(data = df_plot) +
   geom_boxplot(aes(x = group, y = peak_height, fill = condition)) +
   theme_bw()
 print(fig)
-ggsave(plot = fig, width = 5, height = 5, units = "in", dpi = 300, filename = "~/OneDrive - University of Toronto/Projects/Yas accent/figures/gam/gam_peak_height.png")
 
-summary(lmer(peak_height ~ condition * group + (1|ppt), data = df_mod))
-ezANOVA(data = df_mod,
-        dv = peak_height,
-        wid = ppt,
-        within = condition,
-        between = group,
-        type = 3,
-        detailed = TRUE)
+# mod <- lm(peak_height ~ group, data = df_mod)
+mod <- lmer(peak_height ~ group*condition + (1|ppt), data = df_mod)
+summary(mod)
+Anova(mod)
+# pair_comp <- emmeans(mod, pairwise ~ group)
+pair_comp <- emmeans(mod, pairwise ~ group | condition)
+test(pair_comp)
+pair_comp <- emmeans(mod, pairwise ~ group)
+test(pair_comp)
 
-## plotting normalized modeled peak amplitude and stats ####
+## normalized modeled peak ####
 fig <- 
-ggplot(data = df_gam_hasPeak) +
+  ggplot(data = df_plot) +
   geom_boxplot(aes(x = group, y = NMP, fill = condition)) +
   theme_bw()
 print(fig)
-ggsave(plot = fig, width = 5, height = 5, units = "in", dpi = 300, filename = "~/OneDrive - University of Toronto/Projects/Yas accent/figures/gam/gam_NMP.png")
-
-summary(lmer(NMP ~ condition * group + (1|ppt), data = df_mod))
-ezANOVA(data = df_mod,
-        dv = NMP,
-        wid = ppt,
-        within = condition,
-        between = group,
-        type = 3,
-        detailed = TRUE)
+# mod <- lm(NMP ~ group, data = df_mod)
+mod <- lmer(NMP ~ group*condition + (1|ppt), data = df_mod)
+summary(mod)
+Anova(mod, type="III")
+# pair_comp <- emmeans(mod, pairwise ~ group)
+pair_comp <- emmeans(mod, pairwise ~ group | condition)
+test(pair_comp)
 
 ## modeled fractional area latency ####
 fig <- 
-ggplot(data = df_gam_hasPeak) +
+  ggplot(data = df_plot) +
   geom_boxplot(aes(x = group, y = half_area_latency, fill = condition)) +
   theme_bw()
 print(fig)
-ggsave(plot = fig, width = 5, height = 5, units = "in", dpi = 300, filename = "~/OneDrive - University of Toronto/Projects/Yas accent/figures/gam/gam_half_area_latency.png")
-
-summary(lmer(half_area_latency ~ condition * group + (1|ppt), data = df_mod))
-ezANOVA(data = df_mod,
-        dv = half_area_latency,
-        wid = ppt,
-        within = condition,
-        between = group,
-        type = 3,
-        detailed = TRUE)
-
+# mod <- lm(half_area_latency ~ group, data = df_mod)
+mod <- lmer(half_area_latency ~ group*condition + (1|ppt), data = df_mod)
+summary(mod)
+Anova(mod, type="III")
+# pair_comp <- emmeans(mod, pairwise ~ group)
+pair_comp <- emmeans(mod, pairwise ~ group | condition)
+test(pair_comp)
 
 ## modeled peak latency ####
-ggplot(data = df_gam_hasPeak) +
+fig <- 
+  ggplot(data = df_plot) +
   geom_boxplot(aes(x = group, y = peak_time, fill = condition)) +
   theme_bw()
-summary(lmer(peak_time ~ condition * group + (1|ppt), data = df_mod))
-ezANOVA(data = df_mod,
-        dv = peak_time,
-        wid = ppt,
-        within = condition,
-        between = group,
-        type = 3,
-        detailed = TRUE)
+print(fig)
+# mod <- lm(peak_time ~ group, data = df_mod)
+mod <- lmer(peak_time ~ group*condition + (1|ppt), data = df_mod)
+summary(mod)
+Anova(mod, type="III")
+# pair_comp <- emmeans(mod, pairwise ~ group)
+pair_comp <- emmeans(mod, pairwise ~ group | condition)
+test(pair_comp)
+
 
 
 # Brain-behavioral correlation ####
 # read in reading data
 df_rating_raw <- read_delim("~/OneDrive - University of Toronto/Projects/Yas accent/data_analysis/ratings.txt")
 df_rating <- na.omit(df_rating_raw) %>%
-  select(-ppt_group) %>%
   inner_join(df_gam_hasPeak, by = "ppt") %>%
   mutate(language = case_when(
-    group %in% c("ENG", "SEA", "CBC") ~ "english_speaker", # ENG mean English speakers excluding SEA and CBC
-    group %in% c("CHI") ~ "chinese_speaker",
-    .default = "ELSE")) %>%
-  mutate(group = factor(group, levels = c("ENG", "SEA", "CBC", "CHI")),
-         condition = factor(condition, levels = c("ChEn-devi", "EnCh-devi")),
-         language = factor(language, levels = c("english_speaker", "chinese_speaker")))
+    group %in% c("ENG", "CHI") ~ "mono",
+    group %in% c("BILINGUAL") ~ "bili"
+  )) %>%
+  mutate(
+    group = factor(group, levels = c("ENG", "CHI", "BILINGUAL")),
+    condition = factor(condition, levels = c("ChEn-devi", "EnCh-devi")),
+    language = factor(language, levels = c("mono", "bili"))) #%>% filter(half_area_latency>=150 & half_area_latency<=600)
 
 
 df_cor <- df_rating %>%
-  # filter(group=="ENG" & condition == "ChEn-devi") %>%
-  filter(condition == "ChEn-devi") %>%
+  filter(group %in% c("CHI") & condition == "EnCh-devi") %>%
+  # filter(condition == "ChEn-devi") %>%
+  # filter(music_formal>0 & music_formal<25) %>%
   droplevels() %>%
   select(
     c(
       "familiarity_chinese",
       "likelihood_chinese",
-      "familiarity_indian",
-      "likelihood_indian",
+      # "familiarity_indian",
+      # "likelihood_indian",
+      "trad_erp",
+      "gam_erp",
       "area",
       "peak_height",
       "NMP",
       "peak_time",
       "half_area_latency",
-      # # for CHI speakers:
+      # for BILINGUAL group:
+      # "chinese_start_age",
+      # "chinese_daily_use",
+      # "chinese_speaking",
+      # "chinese_listening",
+      # "chinese_reading",
+      # "chinese_writing",
+      # "chinese_overall",
+      # "chinese_listeningspeaking",
+      # # for CHI group
       # "english_start_age",
       # "english_daily_use",
       # "english_speaking",
       # "english_listening",
       # "english_reading",
-      # "english_writing"
+      # "english_writing",
+      "english_overall",
+      "english_listeningspeaking"
+      # # music
+      # "music_formal",
+      # "music_informal",
+      # "music_total"
     ))
-
 corstars(df_cor)
+
+
 # cor(df_cor, use = "complete.obs")
 cor_matrix <- cor(df_cor, use = "pairwise.complete.obs")
+
 
 # matrix of the p-value of the correlation
 p.mat <- cor.mtest(df_cor)
@@ -296,15 +302,35 @@ corrplot(cor_matrix, method="color", col = col(200),
 )
 
 
+# correlation plot ####
 df_cor_plot <- df_rating %>%
-  pivot_longer(cols = familiarity_chinese:likelihood_indian, names_to = "exposure_type", values_to = "rating") %>%
-  # filter(group != "CBC") %>%
-  ungroup()
+  pivot_longer(cols = c(
+    # likelihood_chinese, 
+    # familiarity_chinese,
+    chinese_overall,
+    english_overall,
+    ), names_to = "exposure_type", values_to = "rating") %>%
+  filter(condition %in% c("ChEn-devi", "EnCh-devi")) %>%
+  # filter(half_area_latency>=150 & half_area_latency<=600) %>%
+  # filter(group %in% c("ENG", "BILINGUAL")) %>%
+  # filter(NMP < -1) %>%
+  droplevels()
+
+
+df_cor_plot <- df_rating %>%
+  filter(music_formal>0) %>%
+  # filter(group %in% c("CHI")) %>%
+  pivot_longer(cols = c(music_formal), names_to = "exposure_type", values_to = "rating") %>%
+  filter(condition %in% c("ChEn-devi", "EnCh-devi")) %>%
+  mutate(rating = as.numeric(rating)) %>%
+  droplevels()
 
 
 fig <-
   ggplot(data = df_cor_plot,
-         mapping = aes(x = rating, y = peak_height, group = group, color = group, fill = group)) +
+         mapping = aes(x = rating, y = trad_erp, 
+                       group = group, color = group, fill = group
+                       )) +
   facet_grid(condition ~ exposure_type) +
   geom_point(size = 1, alpha = 0.8) +
   # coord_cartesian(ylim = c(-7, 7),
@@ -326,50 +352,22 @@ print(fig)
 ggsave(plot = fig, width = 12, height = 7, units = "in", dpi = 300, filename = "~/OneDrive - University of Toronto/Projects/Yas accent/figures/correlation/NMP.png")
 
 # regression
-levels(df_rating$group)
-Native_Nonnative <- c(-1/4, -1/4, -1/4, 3/4)
-CHaccent_Else <- c(-1/3, -1/3, 2/3, 0)
-INaccent_Else <- c(-1/2, 1/2, 0, 0)
-contrasts(df_rating$group) <- cbind(Native_Nonnative, CHaccent_Else, INaccent_Else)
 
+# set contrast
 levels(df_rating$condition)
-ChDevi_EnDevi <- c(-1/2, 1/2)
-contrasts(df_rating$condition) <- cbind(ChDevi_EnDevi)
+en_ch <- c(-1/2, 1/2)
+contrasts(df_rating$condition) <- cbind(en_ch)
 
-levels(df_rating$language)
-English_Chinese <- c(-1/2, 1/2)
-contrasts(df_rating$language) <- cbind(English_Chinese)
+levels(df_rating$group)
+MONO_BILI <- c(-1/3, -1/3, 2/3)
+ENG_CHI <- c(-1/2, 1/2, 0)
+contrasts(df_rating$group) <- cbind(MONO_BILI, ENG_CHI)
 
-mod <- lmer(scale(trad_erp1) ~ group * condition * scale(likelihood_chinese) + (1|condition),
-          data = df_rating)
+mod <- lmer(NMP ~ group * condition * scale(likelihood_chinese) + (1|ppt), data = df_rating)
+summary(mod)
 Anova(mod, type = "III")
 
-library(emmeans)
-pair_comp <- emtrends(mod, pairwise ~ condition, var = "likelihood_chinese")
-# slope significance
-test(pair_comp)
-# slope difference
-pair_comp
-# effect size
-eff_size(pair_comp$emtrends, sigma = sigma(mod), edf = df.residual(mod), method = "identity")
-
-
-df_subset <- df_rating[df_rating$language=="english_speaker", ]
-mod <- lmer(scale(NMP) ~ condition * (scale(likelihood_chinese) + scale(familiarity_chinese)) + (1|condition),
-            data = df_subset)
-Anova(mod, type = "III")
-
-df_subset <- df_rating[df_rating$language=="chinese_speaker", ]
-mod <- lmer(scale(NMP) ~ condition * (scale(likelihood_chinese) + scale(english_start_age)) + (1|condition),
-            data = df_subset)
-Anova(mod, type = "III")
-
-mod <- lmer(scale(NMP) ~ condition * scale(likelihood_chinese) + (1|condition),
-            data = df_subset)
-Anova(mod, type = "III")
-
-library(emmeans)
-pair_comp <- emtrends(mod, pairwise ~ condition, var = "likelihood_chinese")
+pair_comp <- emtrends(mod, pairwise ~ group | condition, var = "likelihood_chinese")
 # slope significance
 test(pair_comp)
 # slope difference
